@@ -1,0 +1,248 @@
+{
+  "_comment": "Run with: python3 scripts/smoke_test.py --wait 600. Answer-level correctness is in scripts/model_test.py.",
+  "services": {
+    "api": "http://localhost:8000",
+    "frontend": "http://localhost:7860"
+  },
+  "health": {
+    "api": "{api}/health",
+    "frontend": "{frontend}/"
+  },
+  "checks": [
+    {
+      "name": "api health",
+      "url": "{api}/health",
+      "expect_json_path": "status"
+    },
+    {
+      "name": "model is listed",
+      "url": "{api}/v1/models",
+      "expect_json_path": "data.0.id"
+    },
+    {
+      "name": "gpu actually in use",
+      "url": "{api}/info",
+      "expect_json_path": "gpu.name"
+    },
+    {
+      "name": "vram reported",
+      "url": "{api}/info",
+      "expect_json_path": "gpu.torch_allocated_mb"
+    },
+    {
+      "name": "fla fast path loaded",
+      "url": "{api}/info",
+      "expect_json_path": "fast_path"
+    },
+    {
+      "name": "systemone: choice",
+      "method": "POST",
+      "url": "{api}/v1/systemone",
+      "json": {
+        "model": "clef-flash",
+        "state": "Our checkout started returning errors and orders are blocked.",
+        "questions": {
+          "department": {
+            "type": "choice",
+            "instructions": "Which team should handle the message?",
+            "criteria": {
+              "billing": "Payments or invoices",
+              "technical": "Bugs or outages"
+            }
+          },
+          "urgency": {
+            "type": "score",
+            "criteria": [
+              "Can wait",
+              "This week",
+              "Today"
+            ]
+          },
+          "outage": {
+            "type": "noul",
+            "instructions": "Is a service down?"
+          }
+        }
+      },
+      "expect_json_path": "answers.department.choice",
+      "timeout": 120
+    },
+    {
+      "name": "systemone: score",
+      "method": "POST",
+      "url": "{api}/v1/systemone",
+      "json": {
+        "model": "clef-flash",
+        "state": "Our checkout started returning errors and orders are blocked.",
+        "questions": {
+          "department": {
+            "type": "choice",
+            "instructions": "Which team should handle the message?",
+            "criteria": {
+              "billing": "Payments or invoices",
+              "technical": "Bugs or outages"
+            }
+          },
+          "urgency": {
+            "type": "score",
+            "criteria": [
+              "Can wait",
+              "This week",
+              "Today"
+            ]
+          },
+          "outage": {
+            "type": "noul",
+            "instructions": "Is a service down?"
+          }
+        }
+      },
+      "expect_json_path": "answers.urgency.score",
+      "timeout": 120
+    },
+    {
+      "name": "systemone: noul",
+      "method": "POST",
+      "url": "{api}/v1/systemone",
+      "json": {
+        "model": "clef-flash",
+        "state": "Our checkout started returning errors and orders are blocked.",
+        "questions": {
+          "department": {
+            "type": "choice",
+            "instructions": "Which team should handle the message?",
+            "criteria": {
+              "billing": "Payments or invoices",
+              "technical": "Bugs or outages"
+            }
+          },
+          "urgency": {
+            "type": "score",
+            "criteria": [
+              "Can wait",
+              "This week",
+              "Today"
+            ]
+          },
+          "outage": {
+            "type": "noul",
+            "instructions": "Is a service down?"
+          }
+        }
+      },
+      "expect_json_path": "answers.outage.noul",
+      "timeout": 120
+    },
+    {
+      "name": "systemone: JSON state",
+      "method": "POST",
+      "url": "{api}/v1/systemone",
+      "json": {
+        "model": "clef-flash",
+        "state": {
+          "invoice": {
+            "total": 1250.0,
+            "currency": "USD",
+            "status": "overdue"
+          }
+        },
+        "questions": {
+          "large": {
+            "type": "noul",
+            "instructions": "Is the total above 1000 USD?"
+          }
+        }
+      },
+      "expect_json_path": "x_clef.probabilities.large.true",
+      "timeout": 120
+    },
+    {
+      "name": "systemone: image input",
+      "method": "POST",
+      "url": "{api}/v1/systemone",
+      "json": {
+        "model": "clef-flash",
+        "state": "Look at the image.",
+        "images": [
+          "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAYklEQVR4nO3PMQ0AIADAMEAD/pUhBhEcDcmqYJtn7/GzpQNeNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaA1oDWgNaBdQ5MBhKWjHDQAAAAASUVORK5CYII="
+        ],
+        "questions": {
+          "color": {
+            "type": "choice",
+            "instructions": "What colour is the image?",
+            "criteria": {
+              "red": "Red",
+              "green": "Green",
+              "blue": "Blue"
+            }
+          }
+        }
+      },
+      "expect_json_path": "answers.color.choice",
+      "timeout": 120
+    },
+    {
+      "name": "batch endpoint",
+      "method": "POST",
+      "url": "{api}/v1/systemone/batch",
+      "json": {
+        "model": "clef-flash",
+        "state": [
+          "I was double charged.",
+          "The site is down!",
+          "Love the product."
+        ],
+        "questions": {
+          "department": {
+            "type": "choice",
+            "instructions": "Which team should handle the message?",
+            "criteria": {
+              "billing": "Payments or invoices",
+              "technical": "Bugs or outages"
+            }
+          },
+          "urgency": {
+            "type": "score",
+            "criteria": [
+              "Can wait",
+              "This week",
+              "Today"
+            ]
+          },
+          "outage": {
+            "type": "noul",
+            "instructions": "Is a service down?"
+          }
+        }
+      },
+      "expect_json_path": "timing.records_per_second",
+      "timeout": 120
+    },
+    {
+      "name": "invalid schema rejected (422)",
+      "method": "POST",
+      "url": "{api}/v1/systemone",
+      "json": {
+        "model": "clef-flash",
+        "state": "x",
+        "questions": {
+          "q": {
+            "type": "choice",
+            "criteria": {}
+          }
+        }
+      },
+      "expect_status": 422
+    },
+    {
+      "name": "frontend serves",
+      "url": "{frontend}/",
+      "expect_contains": "gradio"
+    },
+    {
+      "name": "frontend config has tabs",
+      "url": "{frontend}/config",
+      "expect_contains": "Tool router"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "models": {
+    "Cloudflare/clef-flash": {
+      "repo": "Cloudflare/clef-flash",
+      "revision": "17f0b0ad64efb65d273590632833508766b2aae6",
+      "revision_pinned": false,
+      "path": "models/Cloudflare__clef-flash",
+      "downloaded_at": "2026-10-02T10:37:03Z",
+      "file_count": 16,
+      "bytes_on_disk": 19083375832,
+      "files": {
+        "model.safetensors.index.json": 69253,
+        "joint_schema_model.py": 23263,
+        "tokenizer_config.json": 1075,
+        "model-00001-of-00004.safetensors": 4942706120,
+        "tokenizer.json": 19989325,
+        "model-00003-of-00004.safetensors": 4954810240,
+        "processor_config.json": 1191,
+        "generation_config.json": 116,
+        "config.json": 2832,
+        "joint_head.safetensors": 243538016,
+        "README.md": 10222,
+        "model-00004-of-00004.safetensors": 3934446832,
+        "joint_head_config.json": 119,
+        "chat_template.jinja": 7756,
+        "LICENSE": 11544,
+        "model-00002-of-00004.safetensors": 4987757928
+      },
+      "last_modified": "2026-10-01 15:23:49+00:00"
+    }
+  }
+}

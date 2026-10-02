@@ -1,0 +1,14 @@
+# torch / torchvision / triton come from the CUDA base image - reinstalling them
+# here would pull multi-gigabyte wheels and can replace the CUDA build.
+# transformers is pinned to the version the model card was tested with.
+transformers==5.10.2
+accelerate==1.15.0
+safetensors>=0.5
+# Triton kernels for Qwen3.5's gated-delta-net (linear attention) layers.
+# Without it transformers falls back to a much slower pure-torch path.
+flash-linear-attention==0.5.2
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
+pillow==12.3.0
+av==16.0.1
+numpy
