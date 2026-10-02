@@ -11,6 +11,11 @@ make up                                              # the stack must be running
 python docs/capture/screenshots.py docs/media shots  # full-page PNGs, one per tab
 python docs/capture/screenshots.py /tmp/walk video   # the 50 s walkthrough (.webm)
 python docs/capture/clips.py /tmp/clips              # one short .webm per feature
+
+# Live webcam tab. Privacy: NEVER record a real camera for the docs; this repo is public.
+# webcam.py refuses to run without a .y4m/.mjpeg file and always feeds Chromium a fake camera.
+ffmpeg -i frontend/examples/scene_cut.mp4 -vf "fps=15,scale=640:480" -pix_fmt yuv420p /tmp/fakecam.y4m
+python docs/capture/webcam.py /tmp/webcam /tmp/fakecam.y4m   # webcam.webm + webcam.png
 ```
 
 Convert the recordings with ffmpeg. The `.trim` file next to each clip holds the seconds of page

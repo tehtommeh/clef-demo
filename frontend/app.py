@@ -6,6 +6,7 @@ are built around what that makes possible:
 
   Decide        free-form state + schema, with a table-based schema builder
   Vision/Video  the same typed decisions over images and clips
+  Live webcam   the browser's camera, queried continuously against a schema
   Tool router   agent routing: pick a tool, decide whether to call it, fill enum args
   Batch triage  many items, one schema, GPU-batched; confidence threshold -> human review
   What-if       two states side by side, showing how the probabilities move
@@ -23,7 +24,9 @@ import io
 import json
 import mimetypes
 import os
+import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import gradio as gr
@@ -491,6 +494,292 @@ def load_compare_preset(name):
     return f(p["a"]), f(p["b"]), j(p["questions"])
 
 
+# --------------------------------------------------------------- Webcam tab
+# The browser streams frames at STREAM_EVERY; each one lands in a per-session
+# buffer. At most one API query is in flight per session, always on the newest
+# frame (or the newest clip), so the loop runs as fast as the GPU allows and
+# never builds a backlog. Benchmarked on a 3090: ~3.6 queries/s at 448px with 5
+# questions, ~6/s with 1 question; parallel queries add latency, not throughput.
+STREAM_EVERY = 0.1
+BUFFER_SECONDS = 8
+BUFFER_SIDE = 1024
+LIVE: dict[str, dict] = {}
+LIVE_LOCK = threading.Lock()
+PALETTE = ["#f97316", "#6366f1", "#22c55e", "#eab308", "#ec4899", "#06b6d4", "#a855f7", "#94a3b8"]
+
+
+def _session(request: gr.Request) -> dict:
+    with LIVE_LOCK:
+        return LIVE.setdefault(request.session_hash, _fresh_session())
+
+
+def _fresh_session() -> dict:
+    return {"frames": deque(maxlen=int(BUFFER_SECONDS / STREAM_EVERY) + 8), "busy": False, "last_start": 0.0,
+            "lock": threading.Lock(), "params": None, "last_tick": 0.0, "last_frame_t": 0.0, "pending": {},
+            "result": None, "result_id": 0, "rendered_id": -1, "error": None, "history": deque(maxlen=120),
+            "log": deque(maxlen=40), "argmax": {}, "done": deque(maxlen=24), "queries": 0, "schema_key": None}
+
+
+def _jpeg(img, side: int, quality: int = 85) -> bytes:
+    from PIL import Image
+
+    im = img if isinstance(img, Image.Image) else Image.fromarray(img)
+    im = im.convert("RGB")
+    if max(im.size) > side:
+        im.thumbnail((side, side))
+    out = io.BytesIO()
+    im.save(out, "JPEG", quality=quality)
+    return out.getvalue()
+
+
+def _resized_b64(jpeg: bytes, side: int) -> str:
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(jpeg))
+    if max(im.size) > side:
+        jpeg = _jpeg(im, side)
+    return "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+
+
+def _primary(qtype: str, q: dict, ans: dict):
+    """One comparable value per question for the timeline and the change log."""
+    if qtype == "noul":
+        return ans["noul"], ("true" if ans["noul"] >= 0.5 else "false")
+    if qtype == "choice":
+        return ans["confidence"], ans["choice"]
+    n = len(q["criteria"]) - 1
+    top = max(ans["probabilities"], key=ans["probabilities"].get)
+    return (ans["score"] / n if n else 0.0), str(q["criteria"][int(top)])
+
+
+def _live_worker(s: dict) -> None:
+    """Query back-to-back on the newest frame while the stream is alive.
+
+    Chaining here (rather than waiting for the next streamed frame to trigger a
+    query) removes up to STREAM_EVERY of idle GPU time per detection.
+    """
+    try:
+        while True:
+            with s["lock"]:
+                params = s["params"]
+                alive = time.time() - s["last_tick"] < 1.5
+                if not params or not alive:
+                    s["busy"] = False
+                    return
+            wait = s["last_start"] + 1.0 / max(params["max_rate"], 0.1) - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            if not s["frames"] or s["frames"][-1][0] <= s["last_frame_t"]:
+                time.sleep(0.01)  # never score the same frame twice
+                continue
+            s["last_start"] = time.time()
+            _live_query(s, params)
+    except Exception:  # noqa: BLE001
+        with s["lock"]:
+            s["busy"] = False
+        raise
+
+
+def _debounced(s: dict, qid: str, label: str, need: int) -> str | None:
+    """Return the previous label if `label` has now held for `need` detections in a row."""
+    current = s["argmax"].get(qid)
+    if current is None:
+        s["argmax"][qid] = label
+        return None
+    if label == current:
+        s["pending"].pop(qid, None)
+        return None
+    plabel, count = s["pending"].get(qid, (label, 0))
+    count = count + 1 if plabel == label else 1
+    if count >= need:
+        s["pending"].pop(qid, None)
+        s["argmax"][qid] = label
+        return current
+    s["pending"][qid] = (label, count)
+    return None
+
+
+def _live_query(s: dict, params: dict) -> None:
+    try:
+        frames = list(s["frames"])
+        questions = params["questions"]
+        body = {"model": MODEL, "state": params["state"], "questions": questions}
+        if params["mode"] == "clip":
+            horizon = frames[-1][0] - params["clip_secs"]
+            window = [f for f in frames if f[0] >= horizon] or frames[-1:]
+            n = max(2, min(int(params["clip_frames"]), len(window)))
+            picked = [window[round(i * (len(window) - 1) / (n - 1))] for i in range(n)] if len(window) > 1 else window * 2
+            span = picked[-1][0] - picked[0][0]
+            body["videos"] = [[_resized_b64(j, params["size"]) for _, j in picked]]
+            body["video_frames"] = len(picked)
+            body["video_fps"] = round((len(picked) - 1) / span, 3) if span > 0 else 2.0
+            newest_t = picked[-1][0]
+        else:
+            newest_t, jpeg = frames[-1]
+            body["images"] = [_resized_b64(jpeg, params["size"])]
+        s["last_frame_t"] = frames[-1][0]
+        t0 = time.perf_counter()
+        r = requests.post(API_BASE + "/v1/systemone", json=body, timeout=60)
+        rtt = (time.perf_counter() - t0) * 1000
+        data = r.json()
+        if r.status_code >= 400:
+            raise RuntimeError(f"API {r.status_code}: {data.get('detail', data)}")
+        now = time.time()
+        s["done"].append(now)
+        s["queries"] += 1
+        values, stamp = {}, time.strftime("%H:%M:%S")
+        for qid, q in questions.items():
+            v, label = _primary(q["type"], q, data["answers"][qid])
+            values[qid] = (v, label)
+            prev = _debounced(s, qid, label, params["debounce"])
+            if prev is not None:
+                s["log"].appendleft((stamp, qid, prev, label, v))
+        s["history"].append(values)
+        s["result"] = (questions, data, {"rtt": rtt, "age": (now - newest_t) * 1000, "mode": params["mode"],
+                                         "frames": body.get("video_frames", 1)})
+        s["error"] = None
+        s["result_id"] += 1
+    except Exception as e:  # noqa: BLE001 - surfaced in the UI, loop keeps going
+        s["error"] = f"{type(e).__name__}: {e}"
+        s["result_id"] += 1
+        time.sleep(0.5)  # back off rather than hammering a failing API
+
+
+def _rate(s: dict) -> float:
+    d = list(s["done"])
+    return (len(d) - 1) / (d[-1] - d[0]) if len(d) > 1 and d[-1] > d[0] else 0.0
+
+
+def _live_meta(s: dict) -> str:
+    if not s["result"]:
+        return ""
+    _, data, m = s["result"]
+    t = data["x_clef"]["timing"]
+    chips = [("detections / s", f"{_rate(s):.1f}"), ("forward pass", f"{t['forward_ms']:.0f} ms"),
+             ("frame → answer", f"{m['age']:.0f} ms"), ("input tokens", f"{data['usage']['input_tokens']:,}"),
+             ("mode", "clip ×%d" % m["frames"] if m["mode"] == "clip" else "frame"), ("queries", str(s["queries"]))]
+    return "<div class='cl-chips'>" + "".join(
+        f"<div class='cl-chip'><div class='k'>{k}</div><div class='v'>{v}</div></div>" for k, v in chips) + "</div>"
+
+
+def _live_timeline(s: dict, questions: dict) -> str:
+    hist = list(s["history"])
+    if not hist:
+        return ""
+    n = len(hist)
+    rows = []
+    for qid, q in questions.items():
+        pts = [h.get(qid) for h in hist]
+        if q["type"] == "choice":
+            opts = list(q["criteria"])
+            rects = "".join(
+                f"<rect x='{i * 300 / n:.2f}' y='4' width='{300 / n + 0.3:.2f}' height='22' "
+                f"fill='{PALETTE[opts.index(p[1]) % len(PALETTE)] if p and p[1] in opts else 'transparent'}'>"
+                f"<title>{html.escape(p[1]) if p else ''}</title></rect>" for i, p in enumerate(pts))
+            legend = " ".join(f"<span class='cl-leg'><i style='background:{PALETTE[i % len(PALETTE)]}'></i>"
+                              f"{html.escape(o)}</span>" for i, o in enumerate(opts))
+            svg = f"<svg viewBox='0 0 300 30' preserveAspectRatio='none' class='cl-spark'>{rects}</svg>"
+            extra = f"<div class='cl-legend'>{legend}</div>"
+        else:
+            coords = " ".join(f"{(i + 0.5) * 300 / n:.2f},{28 - 24 * (p[0] if p else 0):.2f}" for i, p in enumerate(pts))
+            svg = (f"<svg viewBox='0 0 300 30' preserveAspectRatio='none' class='cl-spark'>"
+                   f"<line x1='0' y1='16' x2='300' y2='16' class='cl-mid'/>"
+                   f"<polyline points='{coords}' class='cl-line'/></svg>")
+            extra = ""
+        cur = pts[-1]
+        now = f"{html.escape(cur[1])} · {cur[0]:.2f}" if cur else ""
+        rows.append(f"<div class='cl-tl'><div class='cl-tl-h'><span class='cl-id'>{html.escape(qid)}</span>"
+                    f"<span class='cl-type t-{q['type']}'>{q['type']}</span><span class='cl-tl-now'>{now}</span></div>"
+                    f"{svg}{extra}</div>")
+    span = ""
+    d = list(s["done"])
+    if len(d) > 1:
+        span = f" · last {min(n, len(hist))} detections"
+    return (f"<div class='cl-card'><div class='cl-qh'><span class='cl-id'>timeline</span>"
+            f"<span class='cl-dim'>P(true) / confidence / expected level{span}</span></div>{''.join(rows)}</div>")
+
+
+def _live_log(s: dict) -> str:
+    if not s["log"]:
+        return "<div class='cl-dim'>Changes in any answer will be logged here.</div>"
+    items = "".join(f"<div class='cl-log'><code>{t}</code> <b>{html.escape(q)}</b> {html.escape(a)} → "
+                    f"<b>{html.escape(b)}</b> <span class='cl-dim'>({v:.2f})</span></div>" for t, q, a, b, v in list(s["log"])[:12])
+    return f"<div class='cl-card'><div class='cl-qh'><span class='cl-id'>changes</span></div>{items}</div>"
+
+
+def live_tick(frame, questions_text, state_text, mode, size, clip_frames, clip_secs, max_rate, debounce, enabled,
+              request: gr.Request):
+    """Runs for every streamed frame: buffer it, maybe start a query, render new results."""
+    s = _session(request)
+    if frame is None:
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+    now = time.time()
+    s["frames"].append((now, _jpeg(frame, BUFFER_SIDE, 80)))
+    try:
+        questions = json.loads(questions_text or "")
+        assert isinstance(questions, dict) and questions
+    except (json.JSONDecodeError, AssertionError):
+        questions = None
+        if s["error"] != INVALID_SCHEMA:
+            s["error"] = INVALID_SCHEMA
+            s["result_id"] += 1  # force a re-render so the message appears
+    else:
+        if s["error"] == INVALID_SCHEMA:
+            s["error"] = None
+    key = json.dumps(questions, sort_keys=True) if questions else None
+    if key != s["schema_key"]:  # new schema: old timeline/log no longer comparable
+        s.update(history=deque(maxlen=120), log=deque(maxlen=40), argmax={}, pending={}, schema_key=key)
+    params = None
+    if enabled and questions:
+        params = {"questions": questions, "state": parse_state(state_text), "mode": mode, "size": int(size),
+                  "clip_frames": int(clip_frames), "clip_secs": float(clip_secs), "max_rate": float(max_rate),
+                  "debounce": int(debounce)}
+    with s["lock"]:  # frame handlers can overlap; only one may start the worker
+        s["params"], s["last_tick"] = params, now
+        start = bool(params and not s["busy"])
+        if start:
+            s["busy"] = True
+    if start:
+        threading.Thread(target=_live_worker, args=(s,), daemon=True).start()
+    with s["lock"]:
+        result, error = s["result"], s["error"]
+        if result is None:  # nothing scored yet: show a pending error, otherwise wait
+            if error and s["rendered_id"] != ("err", error):
+                s["rendered_id"] = ("err", error)
+                return f"<div class='cl-empty'>{html.escape(error)}</div>", "", "", ""
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        if s["result_id"] == s["rendered_id"]:
+            return gr.skip(), gr.skip(), gr.skip(), gr.skip()
+        s["rendered_id"] = s["result_id"]
+    qs, data, _ = result
+    meta = _live_meta(s)
+    if error:
+        meta = f"<div class='cl-status warn'>● {html.escape(error)}</div>" + meta
+    return render_answers(qs, data), meta, _live_timeline(s, qs), _live_log(s)
+
+
+def live_reset(request: gr.Request):
+    with LIVE_LOCK:
+        LIVE[request.session_hash] = _fresh_session()
+    return EMPTY_LIVE, "", "", ""
+
+
+def live_close(request: gr.Request):
+    with LIVE_LOCK:
+        LIVE.pop(request.session_hash, None)
+
+
+def load_webcam_preset(name):
+    p = presets.WEBCAM[name]
+    state = p["state"] if isinstance(p["state"], str) else j(p["state"])
+    return j(p["questions"]), state, p["mode"], p.get("size", 448)
+
+
+INVALID_SCHEMA = "Questions JSON is invalid - fix it to resume detections."
+EMPTY_LIVE = ("<div class='cl-empty'>Allow camera access, then press <b>● Record</b> under the preview. Detections "
+              "stream in here until you press Stop.</div>")
+
+
 # ------------------------------------------------------------------ API tab
 ENDPOINTS = {
     "GET /health": None,
@@ -630,6 +919,42 @@ with gr.Blocks(title="Clef-Flash local") as demo:
             v_preset.change(load_vision_preset, v_preset, [v_image, v_video, v_state, v_questions])
             v_run.click(vision_decide, [v_image, v_video, v_state, v_questions, v_frames], [v_out, v_meta, v_json])
 
+        # ----------------------------------------------------- Live webcam
+        with gr.Tab("📹 Live webcam", id="webcam"):
+            gr.Markdown("Your browser's webcam, asked the same questions over and over. Only one query is in flight "
+                        "at a time and it always uses the newest frame, so this runs as fast as the GPU allows "
+                        "without falling behind. **Frame** mode scores the latest frame. **Clip** mode sends the "
+                        "last few seconds as a short video with real timestamps, for questions about motion. "
+                        "Webcam access needs the page opened on `localhost` (or HTTPS).")
+            with gr.Row():
+                with gr.Column(scale=5):
+                    w_cam = gr.Image(label="Webcam", sources=["webcam"], streaming=True, type="numpy", height=360)
+                    w_preset = gr.Dropdown(list(presets.WEBCAM), value="Room watch", label="Question set")
+                    with gr.Row():
+                        w_mode = gr.Radio([("Frame", "frame"), ("Clip", "clip")], value="frame", label="Mode")
+                        w_enabled = gr.Checkbox(value=True, label="Detections on")
+                    with gr.Row():
+                        w_size = gr.Slider(224, 1024, value=448, step=32, label="Frame size (px, longest side)")
+                        w_rate = gr.Slider(0.5, 10, value=10, step=0.5, label="Max detections / s")
+                    with gr.Row():
+                        w_frames = gr.Slider(2, 16, value=8, step=2, label="Clip frames")
+                        w_secs = gr.Slider(1, 6, value=3, step=0.5, label="Clip length (s)")
+                    w_debounce = gr.Slider(1, 10, value=3, step=1, label="Log a change after N detections in a row",
+                                           info="Debounces flicker when an answer sits near 50/50")
+                    w_state = gr.Textbox(label="State / context", lines=1)
+                    w_questions = gr.Code(label="Questions", language="json", lines=12)
+                    w_reset = gr.Button("Reset timeline", size="sm")
+                with gr.Column(scale=6):
+                    w_meta = gr.HTML()
+                    w_out = gr.HTML(EMPTY_LIVE)
+                    w_timeline = gr.HTML()
+                    w_log = gr.HTML()
+            w_preset.change(load_webcam_preset, w_preset, [w_questions, w_state, w_mode, w_size])
+            w_cam.stream(live_tick, [w_cam, w_questions, w_state, w_mode, w_size, w_frames, w_secs, w_rate, w_debounce, w_enabled],
+                         [w_out, w_meta, w_timeline, w_log], stream_every=STREAM_EVERY, time_limit=None,
+                         show_progress="hidden", concurrency_limit=None)
+            w_reset.click(live_reset, None, [w_out, w_meta, w_timeline, w_log])
+
         # ----------------------------------------------------- Tool router
         with gr.Tab("🧰 Tool router", id="router"):
             gr.Markdown("Agent routing without generating a single token: the tool list becomes a `choice` "
@@ -724,6 +1049,8 @@ with gr.Blocks(title="Clef-Flash local") as demo:
     demo.load(load_decide_preset, d_preset, [d_state, d_questions, d_table])
     demo.load(load_vision_preset, v_preset, [v_image, v_video, v_state, v_questions])
     demo.load(load_toolset, r_preset, [r_msg, r_tools, r_extra, r_hist])
+    demo.load(load_webcam_preset, w_preset, [w_questions, w_state, w_mode, w_size])
+    demo.unload(live_close)
     demo.load(load_batch_preset, b_preset, [b_items, b_questions])
     demo.load(load_compare_preset, c_preset, [c_a, c_b, c_questions])
 

@@ -347,3 +347,193 @@ COMPARE = {
         "questions": {"passes": {"type": "noul", "instructions": "Will the motion pass?"}},
     },
 }
+
+# ------------------------------------------------------------- Webcam tab
+# "mode": frame = newest frame only (fastest); clip = last few seconds as video,
+# for questions about motion or change that one frame cannot answer.
+# "size" (optional, default 448): frame size in px. Raise it when the thing you
+# ask about is small in the shot - see the 3D printer set.
+# Wording tip, measured on an empty room: a vague "none" option loses to a
+# concrete one. "No hand sign" let `rock` win at 40%; "No hand is held up to the
+# camera" made `none` win at 96%.
+WEBCAM = {
+    "Room watch": {
+        "mode": "frame",
+        "state": "Live webcam view of a room.",
+        "questions": {
+            "person": {"type": "noul", "instructions": "Is a person visible?"},
+            "people": {"type": "score", "instructions": "How many people are visible?",
+                       "criteria": ["None", "One", "Two", "Three or more"]},
+            "activity": {"type": "choice", "instructions": "What is happening?",
+                         "criteria": {"empty": "Nobody is there", "working": "Someone working at a desk or computer",
+                                      "talking": "Someone talking or on a call", "moving": "Someone walking or moving around",
+                                      "other": "Something else"}},
+            "lights_on": {"type": "noul", "instructions": "Are the room lights on?"},
+        },
+    },
+    "At the desk": {
+        "mode": "frame",
+        "state": "Live webcam pointed at a person at their desk.",
+        "questions": {
+            "present": {"type": "noul", "instructions": "Is someone sitting in front of the camera?"},
+            "looking": {"type": "noul", "instructions": "Is the person looking at the camera or screen?"},
+            "phone": {"type": "noul", "instructions": "Is the person holding or using a phone?"},
+            "drinking": {"type": "noul", "instructions": "Is the person drinking or holding a cup?"},
+            "headphones": {"type": "noul", "instructions": "Is the person wearing headphones?"},
+        },
+    },
+    "Hand gestures": {
+        "mode": "frame",
+        "state": "Live webcam. A person may be making a hand gesture at the camera.",
+        "questions": {
+            "gesture": {"type": "choice", "instructions": "Which hand gesture is being shown?",
+                        "criteria": {"thumbs_up": "Thumbs up", "thumbs_down": "Thumbs down",
+                                     "peace": "Peace / V sign", "open_palm": "Open palm facing the camera",
+                                     "pointing": "Pointing finger", "fist": "Closed fist",
+                                     "none": "No hand gesture is being shown"}},
+            "fingers": {"type": "score", "instructions": "How many fingers are held up?",
+                        "criteria": ["0", "1", "2", "3", "4", "5"]},
+        },
+    },
+    "Hold it up to the camera": {
+        "mode": "frame",
+        "state": "Live webcam. The person may hold an object up to the camera.",
+        "questions": {
+            "object": {"type": "choice", "instructions": "What is being held up to the camera?",
+                       "criteria": {"phone": "A phone", "cup": "A cup or mug", "book": "A book",
+                                    "paper": "A sheet of paper or document", "pen": "A pen or pencil",
+                                    "keys": "Keys", "nothing": "Nothing is being held up", "other": "Something else"}},
+            "text": {"type": "noul", "instructions": "Is there readable text facing the camera?"},
+        },
+    },
+    "Motion (clip mode)": {
+        "mode": "clip",
+        "state": "The last few seconds of a live webcam feed. Judge what happens across the clip.",
+        "questions": {
+            "waving": {"type": "noul", "instructions": "Is someone waving at the camera?"},
+            "nodding": {"type": "noul", "instructions": "Is someone nodding their head?"},
+            "entering": {"type": "noul", "instructions": "Does someone enter or leave the view during the clip?"},
+            "movement": {"type": "score", "instructions": "How much movement is there?",
+                         "criteria": ["Still", "A little", "Moderate", "A lot"]},
+        },
+    },
+    "Rock, paper, scissors": {
+        "mode": "frame",
+        "state": "Live webcam. A person may hold up a hand to play rock, paper, scissors.",
+        "questions": {
+            "throw": {"type": "choice", "instructions": "Which hand sign is held up to the camera, if any?",
+                      "criteria": {"rock": "A hand held up as a closed fist (rock)",
+                                   "paper": "A hand held up flat and open (paper)",
+                                   "scissors": "A hand held up with two fingers in a V (scissors)",
+                                   "none": "No hand is held up to the camera"}},
+            "hand_visible": {"type": "noul", "instructions": "Is a hand clearly visible?"},
+        },
+    },
+    "Expressions": {
+        "mode": "frame",
+        "state": "Live webcam pointed at a person's face.",
+        "questions": {
+            "expression": {"type": "choice", "instructions": "What facial expression is the person making?",
+                           "criteria": {"smiling": "Smiling or laughing", "neutral": "Neutral, relaxed face",
+                                        "frowning": "Frowning or scowling", "surprised": "Surprised: wide eyes or open mouth",
+                                        "tongue_out": "Sticking their tongue out", "no_face": "No face visible"}},
+            "eyes_closed": {"type": "noul", "instructions": "Are the person's eyes closed?"},
+            "glasses": {"type": "noul", "instructions": "Is the person wearing glasses?"},
+        },
+    },
+    "Posture check": {
+        "mode": "frame",
+        "state": "Live webcam on a monitor, facing a person sitting at their desk.",
+        "questions": {
+            "upright": {"type": "noul", "instructions": "Is the person sitting up straight?"},
+            "too_close": {"type": "noul", "instructions": "Is the person's face very close to the camera or screen?"},
+            "head_on_hand": {"type": "noul", "instructions": "Is the person resting their head on their hand?"},
+            "posture": {"type": "score", "instructions": "How good is the person's posture?",
+                        "criteria": ["Very slouched", "Slouched", "OK", "Upright"]},
+        },
+    },
+    "Show me a colour": {
+        "mode": "frame",
+        "state": "Live webcam. The person holds an object up close to the camera.",
+        "questions": {
+            "colour": {"type": "choice", "instructions": "What is the main colour of the object held up to the camera?",
+                       "criteria": {"red": "Red", "orange": "Orange", "yellow": "Yellow", "green": "Green",
+                                    "blue": "Blue", "purple": "Purple or violet", "pink": "Pink",
+                                    "black": "Black", "white": "White", "none": "Nothing is being held up"}},
+            "multicoloured": {"type": "noul", "instructions": "Does the object have several strong colours?"},
+        },
+    },
+    "Hold up a drawing": {
+        "mode": "frame",
+        "state": "Live webcam. The person may hold up a hand-drawn sketch on paper.",
+        "questions": {
+            "drawing_shown": {"type": "noul", "instructions": "Is a drawing on paper being held up to the camera?"},
+            "shape": {"type": "choice", "instructions": "What shape or picture is drawn?",
+                      "criteria": {"circle": "A circle", "square": "A square or rectangle", "triangle": "A triangle",
+                                   "star": "A star", "heart": "A heart", "smiley": "A smiley face",
+                                   "arrow": "An arrow", "house": "A house", "none": "No drawing visible"}},
+        },
+    },
+    "Workout (clip mode)": {
+        "mode": "clip",
+        "state": "The last few seconds of a webcam feed of someone exercising. Judge the movement across the clip.",
+        "questions": {
+            "exercise": {"type": "choice", "instructions": "Which exercise is being done?",
+                         "criteria": {"jumping_jacks": "Jumping jacks", "squats": "Squats",
+                                      "arm_circles": "Arm circles", "push_ups": "Push-ups",
+                                      "stretching": "Stretching", "boxing": "Shadow boxing / punching",
+                                      "none": "Not exercising"}},
+            "intensity": {"type": "score", "instructions": "How energetic is the movement?",
+                          "criteria": ["Still", "Gentle", "Moderate", "Vigorous"]},
+        },
+    },
+    "Charades (clip mode)": {
+        "mode": "clip",
+        "state": "The last few seconds of a webcam feed. The person is miming an action for a game of charades.",
+        "questions": {
+            "action": {"type": "choice", "instructions": "Which action is the person miming?",
+                       "criteria": {"drinking": "Drinking from a cup", "phone_call": "Talking on the phone",
+                                    "typing": "Typing on a keyboard", "eating": "Eating", "waving": "Waving hello",
+                                    "clapping": "Clapping", "dancing": "Dancing", "sleeping": "Sleeping",
+                                    "driving": "Driving a car", "none": "Not miming anything"}},
+            "confident": {"type": "noul", "instructions": "Is the mime clear enough to guess?"},
+        },
+    },
+    "3D printer watch": {
+        # The printer is a small part of a room-wide shot: at 448px "printer visible"
+        # scored 0.39-0.60 on a real frame, at 640px 0.72-0.88.
+        "mode": "frame",
+        "size": 640,
+        "state": "Webcam watching a 3D printer in an enclosure.",
+        "questions": {
+            "printer_visible": {"type": "noul", "instructions": "Is there a 3D printer or a 3D printer enclosure in the scene?"},
+            "light_on": {"type": "noul", "instructions": "Is the light inside the printer enclosure switched on?"},
+            "printing": {"type": "noul", "instructions": "Is there a printed part sitting on the print bed?"},
+            "spaghetti": {"type": "noul", "instructions": "Has a print failed, leaving a tangled mess of loose "
+                                                          "filament ('spaghetti') on the bed?"},
+            "person_nearby": {"type": "noul", "instructions": "Is a person standing near the printer?"},
+        },
+    },
+    "Pet watch": {
+        "mode": "frame",
+        "state": "Webcam watching a room while the owner is out.",
+        "questions": {
+            "pet": {"type": "choice", "instructions": "Which animal is visible?",
+                    "criteria": {"cat": "A cat", "dog": "A dog", "other": "Another animal", "none": "No animal"}},
+            "on_furniture": {"type": "noul", "instructions": "Is an animal on a chair, sofa, bed or desk?"},
+            "sleeping": {"type": "noul", "instructions": "Is an animal lying down asleep?"},
+        },
+    },
+    "Video-call check": {
+        "mode": "frame",
+        "state": "Webcam framing check before a video call.",
+        "questions": {
+            "face": {"type": "noul", "instructions": "Is a face clearly visible?"},
+            "centered": {"type": "noul", "instructions": "Is the person roughly centred in the frame?"},
+            "backlit": {"type": "noul", "instructions": "Is the person backlit (bright light behind them)?"},
+            "lighting": {"type": "score", "instructions": "How good is the lighting on the subject?",
+                         "criteria": ["Too dark", "Dim", "Good", "Too bright"]},
+            "tidy": {"type": "noul", "instructions": "Is the visible background tidy?"},
+        },
+    },
+}

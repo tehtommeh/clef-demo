@@ -26,6 +26,7 @@ services:
       MAX_IMAGE_SIDE: ${MAX_IMAGE_SIDE}
       VIDEO_MAX_FRAMES: ${VIDEO_MAX_FRAMES}
       VIDEO_MAX_SIDE: ${VIDEO_MAX_SIDE}
+      VIDEO_FRAME_CAP: ${VIDEO_FRAME_CAP}
       TRITON_CACHE_DIR: /cache/triton
       PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
       HF_HUB_OFFLINE: "1"

@@ -119,6 +119,18 @@ def main():
     check("video: starts in a room", lambda: (
         (a := ans(vid))["opening_scene"]["choice"] == "room", f"opening={a['opening_scene']['choice']}"), soft=True)
 
+    def video_frames_scale():
+        # Regression: the video processor used to resample every clip to 4 frames,
+        # so video_frames had no effect. More frames must mean more vision tokens.
+        toks = {}
+        for n in (4, 8, 16):
+            r, _ = post(api, "/v1/systemone", {**vid, "video_frames": n})
+            toks[n] = r["usage"]["input_tokens"]
+            if r["answers"]["closing_scene"]["choice"] != "food":
+                return False, f"{n} frames: closing scene {r['answers']['closing_scene']['choice']}"
+        return toks[4] < toks[8] < toks[16], "tokens by frames: " + ", ".join(f"{n}->{t}" for n, t in toks.items())
+    check("video: frames reach the model (4<8<16)", video_frames_scale)
+
     def batch_consistency():
         items = presets.BATCH["Support inbox"]["items"]
         q = presets.BATCH["Support inbox"]["questions"]

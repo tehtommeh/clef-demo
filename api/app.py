@@ -78,6 +78,9 @@ MAX_IMAGE_SIDE = int(os.environ.get("MAX_IMAGE_SIDE", "1024"))
 MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "8"))
 VIDEO_MAX_FRAMES = int(os.environ.get("VIDEO_MAX_FRAMES", "16"))
 VIDEO_MAX_SIDE = int(os.environ.get("VIDEO_MAX_SIDE", "448"))
+# Hard ceiling on frames per video regardless of what a request asks for
+# (16 frames at 448px is ~1.2k vision tokens; 32 is ~2.4k).
+VIDEO_FRAME_CAP = int(os.environ.get("VIDEO_FRAME_CAP", "32"))
 
 STATE: dict[str, Any] = {"ready": False, "error": None, "loading_since": None}
 STATS = {"requests": 0, "records": 0, "forward_ms_total": 0.0, "errors": 0, "started": time.time()}
@@ -188,19 +191,36 @@ def decode_image(value: Any):
     return image
 
 
-def decode_video(value: Any, max_frames: int):
-    """Decode a base64 video (or a list of base64 frames) into a T x H x W x C uint8 array.
+def _uniform(items: list, count: int) -> list:
+    """Pick `count` items spread evenly across `items` (first and last included)."""
+    if len(items) <= count:
+        return items
+    if count == 1:
+        return [items[-1]]
+    return [items[round(i * (len(items) - 1) / (count - 1))] for i in range(count)]
 
-    The model card takes "frame arrays"; sampling frames uniformly here keeps the
-    vision token count bounded regardless of the clip's length.
+
+def decode_video(value: Any, max_frames: int, frames_fps: float):
+    """Decode a video into (T x H x W x C uint8 array, effective fps of the sampled frames).
+
+    Accepts a base64 video file, or a list of base64 frames (e.g. a webcam clip)
+    captured at `frames_fps`. Frames are sampled uniformly here, and the processor's
+    own resampling is switched off in validate_request: left on, it silently
+    reduces every pre-sampled clip to 4 frames whatever you send.
     """
     import numpy as np
     from PIL import Image
 
+    if isinstance(value, dict) and "frames" in value:
+        frames_fps = float(value.get("fps") or frames_fps)
+        value = value["frames"]
     if isinstance(value, list):
-        frames = [decode_image(v) for v in value]
-    elif isinstance(value, dict) and "frames" in value:
-        frames = [decode_image(v) for v in value["frames"]]
+        if not value:
+            raise ValueError("video frame list is empty")
+        picked = _uniform(value, max_frames)
+        # Subsampling stretches the time between kept frames.
+        fps = frames_fps * (len(picked) - 1) / max(len(value) - 1, 1) if len(picked) > 1 else frames_fps
+        frames = [decode_image(v) for v in picked]
     elif isinstance(value, (str, dict)):
         import av
 
@@ -209,16 +229,18 @@ def decode_video(value: Any, max_frames: int):
             fh.write(raw)
             fh.flush()
             with av.open(fh.name) as container:
+                stream = container.streams.video[0]
+                native_fps = float(stream.average_rate or 24)
                 decoded = [f.to_image() for f in container.decode(video=0)]
         if not decoded:
             raise ValueError("video contained no decodable frames")
-        count = min(max_frames, len(decoded))
-        step = len(decoded) / count
-        frames = [decoded[int(i * step)] for i in range(count)]
+        frames = _uniform(decoded, max_frames)
+        duration = len(decoded) / native_fps
+        fps = len(frames) / duration if duration > 0 else native_fps
     else:
         raise ValueError("videos must be base64 video files or lists of base64 frames")
     out = []
-    for frame in frames[:max_frames]:
+    for frame in frames:
         frame = frame.convert("RGB")
         frame.thumbnail((VIDEO_MAX_SIDE, VIDEO_MAX_SIDE), Image.BICUBIC)
         out.append(np.asarray(frame))
@@ -227,7 +249,7 @@ def decode_video(value: Any, max_frames: int):
     out = [np.asarray(Image.fromarray(f).resize((w, h))) if f.shape[:2] != (h, w) else f for f in out]
     if len(out) % 2:
         out.append(out[-1])
-    return np.stack(out)
+    return np.stack(out), max(fps, 0.01)
 
 
 # ------------------------------------------------------------------ validation
@@ -263,8 +285,19 @@ def validate_request(body: Any) -> dict[str, Any]:
     if images:
         record["images"] = [decode_image(v) for v in images]
     if videos:
-        frames = int(body.get("video_frames") or VIDEO_MAX_FRAMES)
-        record["videos"] = [decode_video(v, max(2, min(frames, 64))) for v in videos]
+        frames = max(2, min(int(body.get("video_frames") or VIDEO_MAX_FRAMES), VIDEO_FRAME_CAP))
+        frames_fps = float(body.get("video_fps") or 2.0)
+        decoded = [decode_video(v, frames, frames_fps) for v in videos]
+        record["videos"] = [d[0] for d in decoded]
+        # do_sample_frames=False: we already sampled. video_metadata gives the
+        # processor real timestamps for the "<t seconds>" tokens it interleaves.
+        record["media_kwargs"] = {
+            "do_sample_frames": False,
+            "video_metadata": [
+                {"fps": fps, "total_num_frames": len(arr), "frames_indices": list(range(len(arr)))}
+                for arr, fps in decoded
+            ],
+        }
     if body.get("id") is not None:
         record["id"] = body["id"]
     return record
@@ -430,7 +463,8 @@ def info():
             "max_input_tokens": MAX_INPUT_TOKENS, "max_batch_tokens": MAX_BATCH_TOKENS,
             "max_batch_size": MAX_BATCH_SIZE, "max_batch_requests": MAX_BATCH_REQUESTS,
             "max_image_side": MAX_IMAGE_SIDE, "max_media_per_request": MAX_IMAGES,
-            "video_max_frames": VIDEO_MAX_FRAMES, "video_max_side": VIDEO_MAX_SIDE,
+            "video_max_frames": VIDEO_MAX_FRAMES, "video_frame_cap": VIDEO_FRAME_CAP,
+            "video_max_side": VIDEO_MAX_SIDE,
         },
         "stats": {
             "requests": STATS["requests"], "records_scored": STATS["records"], "errors": STATS["errors"],

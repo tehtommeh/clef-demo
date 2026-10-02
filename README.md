@@ -66,6 +66,98 @@ living room to a plate of food. The model gets the opening scene (room, 96%), th
 
 ![Vision tab: questions about the start and end of a video clip](docs/media/clip-vision.gif)
 
+### 📹 Live webcam
+
+Point your webcam at something and the same set of questions is asked over and over, as fast as
+the GPU allows. Only one query is in flight at a time and it always takes the newest frame, so the
+answers track the camera instead of falling behind. Results show three ways: live probability
+bars, a timeline per question (P(true), confidence or expected level), and a log of answer changes.
+
+![Live webcam tab: the answers, timeline and change log follow the feed as it cuts between a room and food](docs/media/clip-webcam.gif)
+
+*The recording uses the repo's sample clip as a fake camera, with the questions edited live to
+"room or food?". It contains no real webcam footage.*
+
+**Using it**
+
+1. Open the UI at **http://localhost:7860** on the machine with the camera. Browsers only allow
+   webcam access on `localhost` or HTTPS, so opening it from another machine by IP blocks the camera.
+2. Open the **📹 Live webcam** tab, allow camera access, and press **● Record** under the preview.
+3. Pick a question set, or edit the questions JSON while it runs. Press **Stop** to end.
+
+**Privacy.** Frames go only from your browser to the local frontend and API containers. The
+frontend keeps the last ~8 seconds of frames in memory, for clip mode, and drops them when the tab
+closes. Nothing is written to disk and nothing leaves the machine.
+
+**Question sets**
+
+GPU time per detection was measured on the RTX 3090. Detections/s follows from it, at roughly
+1 / (GPU time + ~20 ms); the three marked ✓ were also measured live on a Logitech C930e.
+
+| Set | Mode | What it answers | GPU time | ≈ Detections/s |
+|---|---|---|---|---|
+| Room watch | frame | person visible, how many, activity, lights on | 188 ms | 5.0 ✓ |
+| At the desk | frame | present, looking at screen, phone, drinking, headphones | 183 ms | 4.9 |
+| Hand gestures | frame | thumbs up/down, peace, open palm, pointing, fist; finger count | 165 ms | 5.5 ✓ |
+| Hold it up to the camera | frame | phone, cup, book, paper, pen, keys…; readable text | 169 ms | 5.3 |
+| Rock, paper, scissors | frame | which sign is thrown | 168 ms | 5.3 |
+| Expressions | frame | smiling, neutral, frowning, surprised, tongue out; eyes closed, glasses | 170 ms | 5.3 |
+| Posture check | frame | sitting upright, too close to the screen, head on hand, posture score | 189 ms | 4.8 |
+| Show me a colour | frame | main colour of a held-up object (9 colours) | 173 ms | 5.2 |
+| Hold up a drawing | frame | drawing shown; circle, square, triangle, star, heart, smiley, arrow, house | 173 ms | 5.2 |
+| 3D printer watch | frame, 640 px | printer visible, enclosure light, part on the bed, failed print ("spaghetti"), person nearby | 271 ms | 3.4 |
+| Pet watch | frame | cat, dog, other; on furniture, asleep | 167 ms | 5.3 |
+| Video-call check | frame | face visible, centred, backlit, lighting score, tidy background | 189 ms | 4.8 |
+| Motion | clip | waving, nodding, someone entering or leaving, amount of movement | 347 ms | 2.4–2.8 ✓ |
+| Workout | clip | jumping jacks, squats, arm circles, push-ups, stretching, boxing; intensity | 349 ms | 2.7 |
+| Charades | clip | drinking, phone call, typing, eating, waving, clapping, dancing, sleeping, driving | 355 ms | 2.7 |
+
+**How the sets were checked.** Every frame-mode set was run on a real frame of an empty room. All
+of them correctly found no person, no face, no gesture, no held-up object and no pet, and the 3D
+printer set found the printer (0.83). The clip-mode sets were run on the sample clip (a room, then
+food, no people) and correctly reported no waving, no exercise and no mime. That shows the sets
+run cleanly and don't raise false alarms. Their accuracy *with* a person in frame hasn't been
+measured, beyond a brief live test where Room watch tracked someone entering and leaving and
+Hand gestures caught an open palm. Try them on yourself to judge.
+
+**Controls**
+
+| Control | Effect |
+|---|---|
+| Mode | **Frame** scores the newest frame. **Clip** sends the last *Clip length* seconds as *Clip frames* frames, with real timestamps, for motion questions. A clip costs about 2× a frame. |
+| Detections on | Pauses querying without stopping the camera. |
+| Frame size | Longest side in px (default 448, set per preset). Raise it for small things in the shot. |
+| Max detections / s | Caps the rate, e.g. to leave GPU for other work. |
+| Log a change after N detections in a row | Debounces the change log (default 3), so an answer near 50/50 doesn't flood it. |
+| State / context | Text sent as the state alongside the image. Describing the setup helps. |
+| Reset timeline | Clears the timeline and the change log. |
+
+**Writing your own question sets**
+
+Edit the questions JSON in the tab, or add an entry to `WEBCAM` in `frontend/presets.py`.
+Lessons measured while building the sets above:
+
+- **Give `none` a concrete description.** On an empty room, "No hand sign" let `rock` win at 40%.
+  Rewording it to "No hand is held up to the camera" (and asking "which sign is held up, *if any*")
+  made `none` win at 96%.
+- **Make small things bigger.** A printer that fills a small part of a room-wide shot scored 0.39–0.60
+  at 448 px and 0.72–0.88 at 640 px. Presets can set `"size"`.
+- **Name what it looks like.** "a 3D printer *or a 3D printer enclosure*" beat "a 3D printer" at every
+  frame size (0.88 vs 0.72 at 640 px).
+- **Questions cost more than pixels.** Each question adds about 85–95 tokens, while 448 → 320 px
+  saves only about 50. One question at 448 px runs at about 6 detections/s, and ten at about 2.7.
+- **Use clip mode only for motion.** "Is someone waving?" needs time; "is someone there?" doesn't,
+  and frame mode answers it about twice as fast.
+
+**Troubleshooting**
+
+| Symptom | Fix |
+|---|---|
+| No camera preview, or the browser never asks for permission | Open the UI via `http://localhost:7860`, not an IP address, and check the browser's camera permission for the site. |
+| Preview works but no detections | Press **● Record**. Check that *Detections on* is ticked and the questions JSON is valid (a warning banner says so if not). |
+| Detections/s lower than the table | Another app is using the GPU, the question set is larger, or *Frame size* is higher. The chips show GPU time per detection. |
+| Answers flicker | The model is genuinely unsure (it's near 50/50). Raise *Log a change after N*, improve the lighting, or reword the question. |
+
 ### 🧰 Tool router
 
 Agent routing without generating a single token. The tool list becomes a `choice` question, with
@@ -104,8 +196,8 @@ Every endpoint, with an editable body, the raw response and the equivalent `curl
 | **Vision**: restaurant photo moderation | **Video**: scene-cut clip |
 | ![Batch](docs/media/batch.png) | ![What-if](docs/media/compare.png) |
 | **Batch triage**: support inbox | **What-if**: severity comparison |
-| ![API playground](docs/media/api.png) | |
-| **API playground** | |
+| ![API playground](docs/media/api.png) | ![Live webcam](docs/media/webcam.png) |
+| **API playground** | **Live webcam**: sample clip as camera |
 
 </details>
 
@@ -131,8 +223,10 @@ curl -s localhost:8000/v1/systemone -H 'Content-Type: application/json' -d '{
 ```
 
 - **Images**: `"images": ["data:image/jpeg;base64,…"]`. These are downscaled server-side to `MAX_IMAGE_SIDE`.
-- **Video**: `"videos": ["data:video/mp4;base64,…"]` (or a list of base64 frames per video), plus an
-  optional `"video_frames": 16`. Frames are sampled uniformly.
+- **Video**: `"videos": ["data:video/mp4;base64,…"]`, or a list of base64 frames per video (e.g. a
+  webcam clip) plus `"video_fps"`, the rate those frames were captured at. Optional
+  `"video_frames": 16` (capped at `VIDEO_FRAME_CAP`). Frames are sampled uniformly across the clip,
+  and the model gets their real timestamps.
 - **Batch**: `POST /v1/systemone/batch` with `{"requests": [...]}`, or with a list-valued `state` and a
   shared `questions` object. Records are length-sorted and packed into padded GPU batches.
   Batched results match single requests to within 0.01 probability (verified by `model_test.py`).
@@ -148,7 +242,8 @@ curl -s localhost:8000/v1/systemone -H 'Content-Type: application/json' -d '{
 | Support triage, 361 tokens | **124 ms** median forward pass, 128 ms HTTP round trip |
 | Long state, 16k tokens | 3.9 s (scales linearly, ~0.25 ms/token) |
 | One 1024-px image (~1k tokens) | 0.35 s forward, 0.6 s total including decode/preprocess |
-| 16-frame video (~770 tokens) | 0.26 s forward, 0.4 s round trip |
+| Video clip at 448 px: 4 / 8 / 16 frames | 767 / 1,063 / 1,655 tokens; 0.26 / 0.36 / 0.52 s forward |
+| Live webcam (2–4 questions, 448 px) | 5.0–5.5 detections/s, see the webcam section |
 | Batch, 48 support tickets | 10.6 items/s |
 
 The model card quotes a 38.8 ms median latency on an H200. On a 3090 the forward pass is
@@ -167,7 +262,8 @@ remaining headroom goes to activations. The limits below were stress-tested on t
 | `MAX_BATCH_TOKENS` | 8192 | Padded tokens per GPU batch (batch size × longest record) |
 | `MAX_BATCH_SIZE` | 16 | Records per GPU batch |
 | `MAX_IMAGE_SIDE` | 1024 | Longest side after downscaling (~1k vision tokens per image) |
-| `VIDEO_MAX_FRAMES` / `VIDEO_MAX_SIDE` | 16 / 448 | Video sampling |
+| `VIDEO_MAX_FRAMES` / `VIDEO_MAX_SIDE` | 16 / 448 | Default frames per video, and frame size |
+| `VIDEO_FRAME_CAP` | 32 | Most frames a request may ask for (32 frames ≈ 2.8k tokens, 0.94 s) |
 
 Media records are scored one per GPU batch, so a batch of image requests can't stack vision memory.
 
@@ -187,6 +283,11 @@ mounted read-only and both containers run as UID/GID 1000 (set in `.env`).
 
 - **Pinned stack**: torch 2.11 + transformers 5.10.2 (what the model card was tested with),
   base image `pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime`.
+- **Video frames need `do_sample_frames=False`.** Qwen3.5's video processor resamples any clip
+  that arrives without timing metadata, and it reduced every clip to 4 frames whatever was sent.
+  The API samples frames itself, switches the processor's sampling off and passes
+  `video_metadata` (fps), so all frames reach the model with correct `<t seconds>` timestamps.
+  `model_test.py` checks that 4 < 8 < 16 frames give increasing token counts.
 - **`flash-linear-attention` matters.** 24 of the 32 backbone layers are Gated DeltaNet (linear
   attention), and fla supplies their Triton kernels. transformers still logs "fast path is not
   available" because the optional `causal-conv1d` package is absent. That only affects a tiny
