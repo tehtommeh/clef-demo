@@ -380,13 +380,14 @@ def batch_run(items_text, questions_text, threshold, gate_scores):
     body = {"model": MODEL, "state": [parse_state(i) for i in items], "questions": questions}
     data, rtt = call("POST", "/v1/systemone/batch", body)
     timing = data["timing"]
-    headers = ["#", "item"]
+    # Decisions first, free text last: a long item column would push the answers off-screen.
+    headers = ["#"]
     for qid, q in questions.items():
         headers += [qid, f"{qid} conf"] if q["type"] != "noul" else [f"{qid} P(true)"]
-    headers.append("route")
+    headers += ["route", "item"]
     rows, flagged, dist = [], 0, {}
     for n, (item, resp) in enumerate(zip(items, data["responses"]), 1):
-        row, low = [n, item], []
+        row, low = [n], []
         for qid, q in questions.items():
             a = resp["answers"][qid]
             if q["type"] == "noul":
@@ -406,7 +407,7 @@ def batch_run(items_text, questions_text, threshold, gate_scores):
                     dist[qid][a["choice"]] += 1
         route_ = "👤 human review (" + ", ".join(low) + ")" if low else "✅ auto"
         flagged += bool(low)
-        row.append(route_)
+        row += [route_, item]
         rows.append(row)
 
     n = len(items)

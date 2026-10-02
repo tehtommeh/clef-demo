@@ -303,6 +303,10 @@ def build_profile(workdir: str, verify_docker_gpu: bool, ports=None) -> dict:
             "arch": platform.machine(),
             "python": platform.python_version(),
             "cpu_count": os.cpu_count(),
+            # Containers run as this user (compose `user:`), so caches and
+            # outputs they write stay owned by whoever ran the stack.
+            "uid": os.getuid() if hasattr(os, "getuid") else None,
+            "gid": os.getgid() if hasattr(os, "getgid") else None,
         },
         "gpu": {
             "vendor": "nvidia" if gpus else ("amd" if amd else "none"),
@@ -370,6 +374,8 @@ def report(p: dict) -> str:
     L = []
     h, g, d = p["host"], p["gpu"], p["docker"]
     L.append(f"Host       {h['os']} {h['release']} ({h['arch']}), {h['cpu_count']} cores")
+    if h.get("uid") is not None:
+        L.append(f"User       uid={h['uid']} gid={h['gid']} (set UID/GID in .env)")
     if g["devices"] and g["vendor"] == "nvidia":
         for dev in g["devices"]:
             L.append(

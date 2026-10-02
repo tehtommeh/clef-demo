@@ -3,6 +3,11 @@
 A self-contained local stack for [Cloudflare/clef-flash](https://huggingface.co/Cloudflare/clef-flash):
 a GPU API container and a Gradio showcase container.
 
+![Tool routing with Clef-Flash: the request is routed to play_music(room="living_room") at 97% confidence, then an off-topic question is routed to "reply directly"](docs/media/clip-router.gif)
+
+▶ **[Watch the full 50-second walkthrough (MP4)](docs/media/walkthrough.mp4)**, recorded against
+the running stack on an RTX 3090. Every number in it is a live result.
+
 ## What the model is
 
 Clef-Flash is a 9.5B multimodal **decision model**. It is a Qwen3.5-9B backbone (with its vision
@@ -43,14 +48,69 @@ while Triton autotunes for it.
 
 ## The frontend
 
-| Tab | Shows off |
+### 🎯 Decide
+
+Any state plus any schema. There are 11 presets that mirror the model's benchmark strengths:
+support triage, invoice JSON, ContractNLI, FinEntity, phishing, SOC alerts, agent-trace auditing,
+WinoGrande, CLadder and forecasting. Below, three entity-level sentiment questions are answered
+in one 131 ms pass. A table-based **schema builder** means you don't have to write JSON by hand,
+and every request is shown as the equivalent `curl`.
+
+![Decide tab: three entity sentiment questions answered in one forward pass](docs/media/clip-decide.gif)
+
+### 🖼️ Vision & video
+
+The same typed questions, asked about an image or a video clip. The included clip cuts from a
+living room to a plate of food. The model gets the opening scene (room, 96%), the closing scene
+(food, 95%) and the cut itself (92.5%), so it reads the clip over time rather than one frame.
+
+![Vision tab: questions about the start and end of a video clip](docs/media/clip-vision.gif)
+
+### 🧰 Tool router
+
+Agent routing without generating a single token. The tool list becomes a `choice` question, with
+`noul` gates for "call now?" and "ask first?" and enum arguments such as room and direction. An
+argument that resolves to `unspecified` is flagged as something to ask the user about. The clip
+at the top of this page is this tab.
+
+### ⚡ Batch triage
+
+Many items, one schema, packed into padded GPU batches. The outputs are calibrated
+probabilities, so a single confidence threshold turns the model into a policy: confident items
+are auto-routed and uncertain ones go to a human. CSV in and out.
+
+![Batch tab: 12 support tickets classified, with auto-routing versus human review](docs/media/clip-batch.gif)
+
+### 🔀 What-if
+
+Two states, one schema, scored side by side in one batch, with Δ in percentage points. One word
+("too large" vs "too small") flips the referent by 96 points, and the severity of a ticket moves
+urgency from "Can wait" to "Right now".
+
+![What-if tab: changing one word flips the decision](docs/media/clip-compare.gif)
+
+### 🛠️ API playground
+
+Every endpoint, with an editable body, the raw response and the equivalent `curl`.
+
+<details>
+<summary><b>Full-page screenshots</b></summary>
+
+| | |
 |---|---|
-| 🎯 Decide | Any state + schema. 11 presets mirror the model's benchmark strengths: support triage, invoice JSON, ContractNLI, FinEntity, phishing, SOC alerts, agent-trace auditing, WinoGrande, CLadder, forecasting. Includes a table-based **schema builder** and the matching `curl`. |
-| 🖼️ Vision & video | Typed questions over an image or video clip. Includes a generated scene-cut clip that tests temporal understanding (start vs end of the clip). |
-| 🧰 Tool router | Agent routing without generating tokens: tools → `choice`, plus `noul` gates for "call now?" and "ask first?", plus enum arguments (room, direction…). Flags unresolved arguments. |
-| ⚡ Batch triage | Many items, one schema, GPU-batched. A confidence threshold turns the calibrated probabilities into a policy (auto-route vs human review). CSV in/out. |
-| 🔀 What-if | Two states, one schema, side by side with Δ in percentage points. Shows how one word or one number moves the decision. |
-| 🛠️ API playground | Every endpoint, editable body, response, and the equivalent `curl`. |
+| ![Decide](docs/media/decide.png) | ![Tool router](docs/media/router.png) |
+| **Decide**: support triage | **Tool router**: smart home |
+| ![Vision](docs/media/vision.png) | ![Video](docs/media/video.png) |
+| **Vision**: restaurant photo moderation | **Video**: scene-cut clip |
+| ![Batch](docs/media/batch.png) | ![What-if](docs/media/compare.png) |
+| **Batch triage**: support inbox | **What-if**: severity comparison |
+| ![API playground](docs/media/api.png) | |
+| **API playground** | |
+
+</details>
+
+The media in `docs/media/` was captured with Playwright against the live stack. To regenerate it
+after UI changes, see [`docs/capture/`](docs/capture/README.md).
 
 ## API
 
@@ -147,4 +207,6 @@ scripts/        download.py, smoke_test.py, model_test.py, preflight.py, _bootst
 models/         weights + download.lock.json (gitignored except the lock)
 cache/triton/   compiled kernel cache (gitignored)
 stack.json      smoke test definitions
+docs/media/     README screenshots, clips and the walkthrough video
+docs/capture/   Playwright scripts that regenerate docs/media
 ```

@@ -1,5 +1,5 @@
 {
-  "_comment": "Run with: python3 scripts/smoke_test.py --wait 600. Answer-level correctness is in scripts/model_test.py.",
+  "_comment": "Run with: python3 scripts/smoke_test.py --wait 600. Known-answer checks use expect_equals/expect_min; deeper answer-level checks are in scripts/model_test.py.",
   "services": {
     "api": "http://localhost:8000",
     "frontend": "http://localhost:7860"
@@ -65,7 +65,8 @@
         }
       },
       "expect_json_path": "answers.department.choice",
-      "timeout": 120
+      "timeout": 120,
+      "expect_equals": "technical"
     },
     {
       "name": "systemone: score",
@@ -98,7 +99,8 @@
         }
       },
       "expect_json_path": "answers.urgency.score",
-      "timeout": 120
+      "timeout": 120,
+      "expect_min": 1.0
     },
     {
       "name": "systemone: noul",
@@ -131,7 +133,8 @@
         }
       },
       "expect_json_path": "answers.outage.noul",
-      "timeout": 120
+      "timeout": 120,
+      "expect_min": 0.5
     },
     {
       "name": "systemone: JSON state",
@@ -154,7 +157,8 @@
         }
       },
       "expect_json_path": "x_clef.probabilities.large.true",
-      "timeout": 120
+      "timeout": 120,
+      "expect_min": 0.5
     },
     {
       "name": "systemone: image input",
@@ -179,7 +183,8 @@
         }
       },
       "expect_json_path": "answers.color.choice",
-      "timeout": 120
+      "timeout": 120,
+      "expect_equals": "red"
     },
     {
       "name": "batch endpoint",
@@ -216,7 +221,8 @@
         }
       },
       "expect_json_path": "timing.records_per_second",
-      "timeout": 120
+      "timeout": 120,
+      "expect_min": 1
     },
     {
       "name": "invalid schema rejected (422)",

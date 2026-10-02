@@ -10,6 +10,10 @@ Usage:
     python3 smoke_test.py --wait 300           # wait for health before testing
     python3 smoke_test.py --json
     python3 smoke_test.py --only "chat"        # run matching checks only
+
+Check keys: url, method, json, headers, timeout, optional, expect_status,
+expect_json_path, expect_contains, expect_content_type, and for known-answer
+checks on the value at expect_json_path: expect_equals, expect_min, expect_max.
 """
 from __future__ import annotations
 
@@ -126,6 +130,18 @@ def evaluate(check, status, body):
             return False, "missing json path '{}'".format(path)
         if value in (None, "", [], {}):
             return False, "json path '{}' was empty".format(path)
+        # Known-answer checks: a model that answers wrongly still returns valid
+        # JSON, so shape-only checks cannot catch a broken loader or prompt format.
+        if "expect_equals" in check and value != check["expect_equals"]:
+            return False, "'{}' = {!r}, expected {!r}".format(path, value, check["expect_equals"])
+        for key, cmp, word in (("expect_min", lambda v, t: v >= t, ">="), ("expect_max", lambda v, t: v <= t, "<=")):
+            if key in check:
+                try:
+                    ok = cmp(float(value), float(check[key]))
+                except (TypeError, ValueError):
+                    return False, "'{}' = {!r} is not numeric".format(path, value)
+                if not ok:
+                    return False, "'{}' = {} not {} {}".format(path, value, word, check[key])
 
     needle = check.get("expect_contains")
     if needle:
